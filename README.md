@@ -25,19 +25,21 @@ Este projeto visa criar um sistema de análise financeira utilizando dados de bo
 
 ### 2. Mensageria
 
-Utilização de Apache Kafka para gerenciar a transmissão de dados entre os serviços, garantindo uma arquitetura escalável.
+- Utilização de Apache Kafka para gerenciar a transmissão de dados entre os serviços, garantindo uma arquitetura escalável.
 
 ### 3. Serviço
 
-S1 (Coletor de Dados): manchetes de jornais relevantes para o mercado.
-S2 (Processamento e Armazenamento): Realiza a limpeza, organização e armazenamento das informações coletadas nos respectivos bancos.
-S3 (Análise e Validação): validar os dados armazenados (logs).
+- S1 (Coletor de Dados): manchetes de jornais relevantes para o mercado.
+- S2 (Processamento e Armazenamento): Realiza a limpeza, organização e armazenamento das informações coletadas nos respectivos bancos.
+- S3 (Análise e Validação): validar os dados armazenados (logs).
 
-Todos os dados inclusos serão provenientes do Kaggle.
++ Todos os dados inclusos serão provenientes do Kaggle:
+  - https://www.kaggle.com/datasets/borismarjanovic/price-volume-data-for-all-us-stocks-etfs
+  - https://www.kaggle.com/datasets/aaron7sun/stocknews
 
 ### 4. Justificativa do Uso de cada Tecnologia
 
-PostgreSQL: Ideal para armazenamento estruturado de dados financeiros históricos e análises transacionais.
-MongoDB: Perfeito para armazenar notícias e textos não estruturados de grande quantidade, facilitando consultas complexas.
-Cassandra: Excelente para lidar com grandes volumes (rápido) de dados de séries temporais, garantindo escalabilidade para análise preditivas.
+- PostgreSQL: Ideal para armazenamento estruturado de dados financeiros históricos e análises transacionais.
+- MongoDB: Perfeito para armazenar notícias e textos não estruturados de grande quantidade, facilitando consultas complexas.
+- Cassandra: Excelente para lidar com grandes volumes (rápido) de dados de séries temporais, garantindo escalabilidade para análise preditivas.
 
