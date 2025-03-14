@@ -4,6 +4,7 @@ Análise Global de Mercados Financeiros
 ## Integrantes
 
 Gustavo Dias Vicentin - 22.123.061-8
+
 Thales Pasquotto - 22.222.033-7
 
 ## Arquitetura do Projeto
