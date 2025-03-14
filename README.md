@@ -36,6 +36,7 @@ Este projeto visa criar um sistema de análise financeira utilizando dados de bo
 + Todos os dados inclusos serão provenientes do Kaggle:
   - https://www.kaggle.com/datasets/borismarjanovic/price-volume-data-for-all-us-stocks-etfs
   - https://www.kaggle.com/datasets/aaron7sun/stocknews
+  - https://www.kaggle.com/datasets/federalreserve/exchange-rates
 
 ### 4. Justificativa do Uso de cada Tecnologia
 
