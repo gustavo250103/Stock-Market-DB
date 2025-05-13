@@ -39,7 +39,7 @@ services:
     container_name: producer
     build:
       context: .
-      dockerfile: Dockerfile.producer
+      dockerfile: services/S1/Dockerfile.producer
     depends_on:
       - kafka
     restart: on-failure
@@ -48,7 +48,53 @@ services:
     container_name: consumer
     build:
       context: .
-      dockerfile: Dockerfile.consumer
+      dockerfile: services/S3/Dockerfile.consumer
     depends_on:
       - kafka
     restart: on-failure
+
+  datahandler:
+    container_name: datahandler
+    build:
+      context: .
+      dockerfile: services/S2/Dockerfile.datahandler
+    depends_on:
+      - kafka
+    restart: on-failure
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=users
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  mongo-express:
+    image: mongo-express
+    ports:
+      - 8081:8081
+    environment:
+      ME_CONFIG_BASICAUTH_USERNAME: projeto
+      ME_CONFIG_BASICAUTH_PASSWORD: projeto
+      ME_CONFIG_MONGODB_PORT: 27017
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: MongoDB2025!
+    links:
+      - mongo
+
+  mongo:
+    image: mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: MongoDB2019!
+    ports:
+      - "27017:27017"
+
+  cassandra:
+    image: cassandra:latest
+    ports:
+      - "9042:9042"
+    restart: unless-stopped

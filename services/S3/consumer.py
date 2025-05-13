@@ -2,12 +2,12 @@ from kafka import KafkaConsumer
 import json
 
 consumer = KafkaConsumer(
-    'temperature-sensor-topic',
-    api_version=(3, 8, 0),
+    'topico-validacoes',
+    api_version=(3, 9, 0),
     bootstrap_servers='kafka:9092',
     auto_offset_reset='earliest',
     enable_auto_commit=True,
-    group_id='temperature-sensor-group',
+    group_id='grupo-validacoes',
     value_deserializer=lambda x: json.loads(x.decode('utf-8'))
 )
 
