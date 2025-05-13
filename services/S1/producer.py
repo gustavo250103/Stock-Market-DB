@@ -16,7 +16,7 @@ def generate_data():
     return {
         'sensor_id': str(random.randint(1, 50)),
         'temperature': round(random.uniform(-10.0, 40.0), 2),
-        'timestamp': fake.datetime().isoformat()
+        'timestamp': fake.date_time().isoformat()
     }
 
 if __name__ == '__main__':
