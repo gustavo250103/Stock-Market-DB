@@ -4,6 +4,6 @@ WORKDIR /app
 
 COPY services/S2/dataHandler.py /app/
 
-RUN pip install kafka-python faker pymongo
+RUN pip install kafka-python faker pymongo psycopg2-binary cassandra-driver
 
 CMD ["python", "dataHandler.py"]
