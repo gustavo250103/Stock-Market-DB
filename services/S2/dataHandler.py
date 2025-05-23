@@ -25,24 +25,27 @@ producer = KafkaProducer(
     key_serializer=lambda k: str(k).encode('utf-8') if k is not None else None
 )
 
-def respostaInclusao(message, resultado, id_registro):
+def enviar_resposta_inclusao(mensagem, resultado, id_registro):
+    #Envia resposta de inclusão para o tópico de validações
     resposta = {
-        'chave-requisicao': message.key,
-        'acao': message.value['acao'],
-        'banco': message.value['banco'],
+        'chave-requisicao': mensagem.key,
+        'acao': mensagem.value['acao'],
+        'banco': mensagem.value['banco'],
         'resultado': resultado,
         'id-registro-banco': id_registro
     }
     producer.send('topico-validacoes', resposta)
 
-def inputMongoDB(message):
+def inserir_mongodb(mensagem):
+    #Insere dados no MongoDB
     conn = MongoClient('mongodb://mongodb:27017/')
     db = conn.StockMarket
     collection = db.noticias
-    resultado = collection.insert_one(message.value['dados'])
+    resultado = collection.insert_one(mensagem.value['dados'])
     return resultado.inserted_id
 
-def inputPostgreSQL(message):
+def inserir_postgresql(mensagem):
+    #Insere dados no PostgreSQL
     conn = psycopg2.connect(
         host='postgres',
         database='users',
@@ -52,7 +55,7 @@ def inputPostgreSQL(message):
     cursor = conn.cursor()
     
     # Cria a tabela se não existir
-    create_table_query = """
+    criar_tabela = """
     CREATE TABLE IF NOT EXISTS historicoFinanceiro (
         id SERIAL PRIMARY KEY,
         codigo VARCHAR(10),
@@ -63,11 +66,11 @@ def inputPostgreSQL(message):
         ultima_atualizacao TIMESTAMP
     );
     """
-    cursor.execute(create_table_query)
+    cursor.execute(criar_tabela)
     conn.commit()
     
-    # Extrai os dados da mensagem
-    dados = message.value['dados']
+    # Pega os dados da mensagem
+    dados = mensagem.value['dados']
     
     # Mapeia os campos da mensagem para as colunas da tabela
     dados_mapeados = {
@@ -75,19 +78,18 @@ def inputPostgreSQL(message):
         'preco': dados.get('preco'),
         'volume': dados.get('volume'),
         'variacao': dados.get('variacao'),
-        'data_hora': dados.get('timestamp'),  # Mapeia timestamp para data_hora
-        'ultima_atualizacao': dados.get('timestamp')  # Usa o mesmo timestamp para ultima_atualizacao
+        'data_hora': dados.get('timestamp'),
+        'ultima_atualizacao': dados.get('timestamp')
     }
     
-    # Remove valores None do dicionário
+    # Remove valores vazios do dicionário
     dados_mapeados = {k: v for k, v in dados_mapeados.items() if v is not None}
     
-    # Cria a query de inserção dinamicamente baseada nas chaves do dicionário
+    # Monta a query de inserção
     colunas = ', '.join(dados_mapeados.keys())
     valores = ', '.join(['%s'] * len(dados_mapeados))
     query = f"INSERT INTO historicoFinanceiro ({colunas}) VALUES ({valores}) RETURNING id"
     
-    # Executa a query com os valores
     cursor.execute(query, list(dados_mapeados.values()))
     id_registro = cursor.fetchone()[0]
     
@@ -97,8 +99,8 @@ def inputPostgreSQL(message):
     
     return id_registro
 
-def inputCassandra(message):
-    # Conecta ao cluster Cassandra
+def inserir_cassandra(mensagem):
+    #Insere dados no Cassandra
     cluster = Cluster(['cassandra'])
     session = cluster.connect()
     
@@ -108,7 +110,6 @@ def inputCassandra(message):
         WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}
     """)
     
-    # Usa o keyspace
     session.set_keyspace('stockmarket')
     
     # Cria a tabela se não existir
@@ -123,16 +124,13 @@ def inputCassandra(message):
         )
     """)
     
-    # Extrai os dados da mensagem
-    dados = message.value['dados']
+    dados = mensagem.value['dados']
     
-    # Prepara a query de inserção
     query = """
         INSERT INTO analise_preditiva (id, ativo, previsao_preco, confianca, horizonte_tempo, timestamp)
         VALUES (uuid(), %s, %s, %s, %s, %s)
     """
     
-    # Executa a query com os valores
     session.execute(query, (
         dados['ativo'],
         float(dados['previsao_preco']),
@@ -141,30 +139,127 @@ def inputCassandra(message):
         dados['timestamp']
     ))
     
-    # Fecha a conexão
     session.shutdown()
     cluster.shutdown()
     
     return "sucesso"
 
+def pesquisar_postgresql(mensagem):
+    #Pesquisa dados no PostgreSQL
+    conn = psycopg2.connect(
+        host='postgres',
+        database='users',
+        user='admin',
+        password='password'
+    )
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    dados = mensagem.value['dados']
+    query = """
+        SELECT * FROM historicoFinanceiro 
+        WHERE codigo = %s 
+        AND data_hora BETWEEN %s AND %s
+        ORDER BY data_hora DESC
+    """
+    
+    cursor.execute(query, (
+        dados['symbol'],
+        dados['data_inicio'],
+        dados['data_fim']
+    ))
+    
+    resultados = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    return resultados
+
+def pesquisar_mongodb(mensagem):
+    #Pesquisa dados no MongoDB
+    conn = MongoClient('mongodb://mongodb:27017/')
+    db = conn.StockMarket
+    collection = db.noticias
+    
+    dados = mensagem.value['dados']
+    query = {
+        'symbol': dados['symbol'],
+        'data_publicacao': {
+            '$gte': dados['data_inicio'],
+            '$lte': dados['data_fim']
+        }
+    }
+    
+    resultados = list(collection.find(query))
+    conn.close()
+    
+    return resultados
+
+def pesquisar_cassandra(mensagem):
+    #Pesquisa dados no Cassandra
+    cluster = Cluster(['cassandra'])
+    session = cluster.connect('stockmarket')
+    
+    dados = mensagem.value['dados']
+    query = """
+        SELECT * FROM analise_preditiva 
+        WHERE ativo = %s 
+        AND timestamp >= %s 
+        AND timestamp <= %s
+        ALLOW FILTERING
+    """
+    
+    resultados = session.execute(query, (
+        dados['symbol'],
+        dados['data_inicio'],
+        dados['data_fim']
+    ))
+    
+    session.shutdown()
+    cluster.shutdown()
+    
+    return list(resultados)
+
+def enviar_resposta_pesquisa(mensagem, resultados):
+    #Envia resposta de pesquisa para o tópico de validações
+    resposta = {
+        'chave-requisicao': mensagem.key,
+        'acao': mensagem.value['acao'],
+        'resultado': 'sucesso' if any(resultados.values()) else 'Nada encontrado',
+        'dados': {
+            'postgresql': resultados['postgresql'],
+            'mongodb': resultados['mongodb'],
+            'cassandra': resultados['cassandra']
+        }
+    }
+    producer.send('topico-validacoes', resposta)
+
 if __name__ == '__main__':
-    for message in consumer:
-        if message.value['acao'] == 'inclusao':
+    for mensagem in consumer:
+        if mensagem.value['acao'] == 'inclusao':
             print(f"Incluindo dados...")
-            if message.value['banco'] == 'PostgreSQL':
+            if mensagem.value['banco'] == 'PostgreSQL':
                 print(f"Incluindo dados no PostgreSQL...")
-                result = inputPostgreSQL(message)
-                respostaInclusao(message, "sucesso", result)
-                print(f"Dados inseridos com sucesso! ID: {result}")
-            elif message.value['banco'] == 'MongoDB':
+                resultado = inserir_postgresql(mensagem)
+                enviar_resposta_inclusao(mensagem, "sucesso", resultado)
+                print(f"Dados inseridos com sucesso! ID: {resultado}")
+            elif mensagem.value['banco'] == 'MongoDB':
                 print(f"Incluindo dados no MongoDB...")
-                result = inputMongoDB(message)
-                respostaInclusao(message, "sucesso", result)
-                print(f"Dados inseridos com sucesso! ID: {result}")
-            elif message.value['banco'] == 'Cassandra':
+                resultado = inserir_mongodb(mensagem)
+                enviar_resposta_inclusao(mensagem, "sucesso", resultado)
+                print(f"Dados inseridos com sucesso! ID: {resultado}")
+            elif mensagem.value['banco'] == 'Cassandra':
                 print(f"Incluindo dados no Cassandra...")
-                result = inputCassandra(message)
-                respostaInclusao(message, result, "sucesso")
+                resultado = inserir_cassandra(mensagem)
+                enviar_resposta_inclusao(mensagem, resultado, "sucesso")
                 print(f"Dados inseridos com sucesso!")
-        print(f"Received message: {message.value}")
+        elif mensagem.value['acao'] == 'pesquisa':
+            print(f"Pesquisando dados em todos os bancos...")
+            resultados = {
+                'postgresql': pesquisar_postgresql(mensagem),
+                'mongodb': pesquisar_mongodb(mensagem),
+                'cassandra': pesquisar_cassandra(mensagem)
+            }
+            enviar_resposta_pesquisa(mensagem, resultados)
+            print(f"Pesquisa concluída em todos os bancos!")
+        print(f"Mensagem recebida: {mensagem.value}")
 
