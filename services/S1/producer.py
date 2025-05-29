@@ -13,30 +13,8 @@ producer = KafkaProducer(
     bootstrap_servers='kafka:9092',
     api_version=(3, 9, 0),
     value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-    key_serializer=lambda k: k.encode('utf-8')
+    key_serializer=lambda k: str(k).encode('utf-8') if k is not None else None
 )
-
-def send_to_consumer(data):
-    # Envia dados diretamente para o consumer via socket
-    try:
-        # Tenta várias vezes se houver erro de conexão
-        max_retries = 5
-        retry_interval = 2
-        
-        for i in range(max_retries):
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.connect(('consumer', 5000))
-                    s.sendall(json.dumps(data).encode('utf-8'))
-                    return  # Sucesso, sai da função
-            except Exception as e:
-                if i < max_retries - 1:
-                    print(f"Tentativa {i+1} falhou: {e}. Tentando novamente em {retry_interval} segundos...")
-                    time.sleep(retry_interval)
-                else:
-                    print(f"Todas as tentativas falharam: {e}")
-    except Exception as e:
-        print(f"Erro ao enviar para consumer: {e}")
 
 def gerar_insercao_postgre():
     #Gera dados aleatórios para inserir no PostgreSQL
@@ -101,36 +79,62 @@ def gerar_insercao_cassandra():
     }
 
 def gerar_requisicao_pesquisa():
-    # Gera uma requisição de pesquisa sem especificar o banco
+    # Gera uma requisição de pesquisa com dados específicos para cada banco
     id_requisicao = str(uuid.uuid4())
-    simbolo = fake.random_element(['PETR4', 'VALE3', 'ITUB4', 'BBDC4'])
+    banco = fake.random_element(['PostgreSQL', 'MongoDB', 'Cassandra'])
+    
+    # Dados base comuns
+    dados_base = {
+        'data_inicio': (datetime.now() - timedelta(days=7)).isoformat(),
+        'data_fim': datetime.now().isoformat()
+    }
+    
+    # Dados específicos para cada banco
+    if banco == 'PostgreSQL':
+        dados_base.update({
+            'codigo': fake.random_element(['PETR4', 'VALE3', 'ITUB4', 'BBDC4']),
+            'preco': round(random.uniform(10.0, 100.0), 2),
+            'volume': random.randint(1000, 1000000)
+        })
+    elif banco == 'MongoDB':
+        dados_base.update({
+            'symbol': fake.random_element(['PETR4', 'VALE3', 'ITUB4', 'BBDC4']),
+            'fonte': fake.random_element(['Reuters', 'Bloomberg', 'Valor Econômico'])
+        })
+    elif banco == 'Cassandra':
+        dados_base.update({
+            'ativo': fake.random_element(['PETR4', 'VALE3', 'ITUB4', 'BBDC4']),
+            'horizonte_tempo': fake.random_element(['1d', '1w', '1m'])
+        })
     
     return {
         'request_id': id_requisicao,
         'acao': 'pesquisa',
-        'dados': {
-            'symbol': simbolo,
-            'data_inicio': (datetime.now() - timedelta(days=7)).isoformat(),
-            'data_fim': datetime.now().isoformat()
-        }
+        'banco': banco,
+        'dados': dados_base
     }
 
 if __name__ == '__main__':
     topico = 'topico-requisicoes'
     
     while True:
-        # Escolhe aleatoriamente qual tipo de dado vai gerar
-        geradores = [
-            gerar_insercao_postgre,
-            gerar_insercao_mongodb,
-            gerar_insercao_cassandra,
-            gerar_requisicao_pesquisa
-        ]
+        # Primeiro escolhe entre inclusão e pesquisa (50% de chance para cada)
+        tipo_operacao = random.choice(['inclusao', 'pesquisa'])
         
-        dados = random.choice(geradores)()
-        chave = dados['request_id']
+        if tipo_operacao == 'inclusao':
+            # Se for inclusão, escolhe aleatoriamente qual banco (33.33% de chance para cada)
+            banco = random.choice(['PostgreSQL', 'MongoDB', 'Cassandra'])
+            if banco == 'PostgreSQL':
+                dados = gerar_insercao_postgre()
+            elif banco == 'MongoDB':
+                dados = gerar_insercao_mongodb()
+            else:  # Cassandra
+                dados = gerar_insercao_cassandra()
+        else:  # pesquisa
+            dados = gerar_requisicao_pesquisa()
+        
+        chave = dados['request_id']  # Já é string do UUID
         
         producer.send(topico, key=chave, value=dados)
-        send_to_consumer(dados)
         print(f"Dados enviados: {dados}")
         time.sleep(2)

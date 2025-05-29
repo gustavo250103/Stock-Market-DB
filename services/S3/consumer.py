@@ -1,18 +1,9 @@
 from kafka import KafkaConsumer
 import json
-import os
 from datetime import datetime
-import socket
-import threading
 import time
-import sys
 from elasticsearch import Elasticsearch
 from elasticsearch.exceptions import ConnectionError as ESConnectionError
-
-# Pasta onde vamos guardar as requisições e respostas
-PASTA_REQUISICOES = 'requests'
-if not os.path.exists(PASTA_REQUISICOES):
-    os.makedirs(PASTA_REQUISICOES)
 
 def esperar_elasticsearch(max_tentativas=30, intervalo=2):
     # Fica esperando o Elasticsearch ficar pronto
@@ -31,199 +22,167 @@ def esperar_elasticsearch(max_tentativas=30, intervalo=2):
 # Configuração do Elasticsearch
 es = esperar_elasticsearch()
 
-# Configuração do servidor socket
-HOST = '0.0.0.0'
-PORT = 5000
-
 # Configuração do Kafka
 KAFKA_BOOTSTRAP_SERVERS = 'kafka:9092'
-KAFKA_TOPIC = 'stock_data'
-
-def salvar_requisicao(dados_requisicao):
-    """Salva a requisição em um arquivo JSON"""
-    try:
-        id_requisicao = dados_requisicao['request_id']
-        nome_arquivo = os.path.join(PASTA_REQUISICOES, f'request_{id_requisicao}.json')
-        
-        info_requisicao = {
-            'request_id': id_requisicao,
-            'request_timestamp': datetime.now().isoformat(),
-            'status': 'pending',
-            'request': dados_requisicao
-        }
-        
-        with open(nome_arquivo, 'w') as f:
-            json.dump(info_requisicao, f, indent=2)
-        
-        print(f"[SOCKET] Requisição {id_requisicao} salva com sucesso")
-    except Exception as e:
-        print(f"[SOCKET] Erro ao salvar requisição: {e}")
-        print(f"[SOCKET] Dados da requisição: {dados_requisicao}")
-
-def validar_resposta(dados_requisicao, dados_resposta):
-    #Verifica se a resposta bate com a requisição
-    try:
-        if dados_requisicao['acao'] == 'inclusao':
-            return dados_resposta['resultado'] == 'sucesso'
-        elif dados_requisicao['acao'] == 'requisicao':
-            return 'dados' in dados_resposta
-        return False
-    except Exception as e:
-        print(f"[VALIDACAO] Erro ao validar resposta: {e}")
-        return False
-
-def atualizar_requisicao_com_resposta(id_requisicao, dados_resposta):
-    #Atualiza o arquivo da requisição com a resposta que recebemos
-    try:
-        nome_arquivo = os.path.join(PASTA_REQUISICOES, f'request_{id_requisicao}.json')
-        
-        if os.path.exists(nome_arquivo):
-            with open(nome_arquivo, 'r') as f:
-                info_requisicao = json.load(f)
-            
-            info_requisicao['status'] = 'completed'
-            info_requisicao['response'] = dados_resposta
-            info_requisicao['response_timestamp'] = datetime.now().isoformat()
-            info_requisicao['valid'] = validar_resposta(info_requisicao['request'], dados_resposta)
-            
-            with open(nome_arquivo, 'w') as f:
-                json.dump(info_requisicao, f, indent=2)
-            
-            print(f"[KAFKA] Requisição {id_requisicao} atualizada com resposta. Válida: {info_requisicao['valid']}")
-        else:
-            print(f"[KAFKA] Aviso: Arquivo da requisição não encontrado para ID {id_requisicao}")
-    except Exception as e:
-        print(f"[KAFKA] Erro ao atualizar requisição com resposta: {e}")
+TOPICO_REQUISICOES = 'topico-requisicoes'
+TOPICO_VALIDACOES = 'topico-validacoes'
 
 def criar_indice_se_nao_existir():
     #Cria o índice no Elasticsearch se ele não existir
-    if not es.indices.exists(index="stock_data"):
+    if not es.indices.exists(index="requests_responses"):
         es.indices.create(
-            index="stock_data",
+            index="requests_responses",
             body={
                 "mappings": {
                     "properties": {
-                        "symbol": {"type": "keyword"},
-                        "price": {"type": "float"},
-                        "volume": {"type": "long"},
-                        "timestamp": {"type": "date"},
-                        "source": {"type": "keyword"}
+                        "request_id": {"type": "keyword"},
+                        "request_timestamp": {"type": "date"},
+                        "response_timestamp": {"type": "date"},
+                        "status": {"type": "keyword"},
+                        "banco": {"type": "keyword"},
+                        "acao": {"type": "keyword"},
+                        "request": {"type": "object"},
+                        "response": {"type": "object"},
+                        "resultado": {"type": "keyword"},
+                        "dados_resposta": {"type": "object"}
                     }
                 }
             }
         )
 
-def lidar_com_cliente(socket_cliente, endereco):
-    #Cuida da conexão com o cliente
-    print(f"Conexão estabelecida com {endereco}")
+def processar_requisicao(mensagem):
+    #Salva a requisição no Elasticsearch
     try:
-        while True:
-            dados = socket_cliente.recv(1024)
-            if not dados:
-                break
-            
-            # Processa os dados que recebemos
-            try:
-                mensagem = json.loads(dados.decode())
-                print(f"Dados recebidos: {mensagem}")
-                
-                # Verifica se tem todos os campos que precisamos
-                if all(key in mensagem for key in ['symbol', 'price', 'volume']):
-                    # Manda os dados pro Elasticsearch
-                    es.index(
-                        index="stock_data",
-                        document={
-                            "symbol": mensagem["symbol"],
-                            "price": float(mensagem["price"]),
-                            "volume": int(mensagem["volume"]),
-                            "timestamp": mensagem.get("timestamp", datetime.now().isoformat()),
-                            "source": "socket"
-                        }
-                    )
-                else:
-                    print("Dados incompletos recebidos via socket")
-                
-            except json.JSONDecodeError:
-                print("Erro ao decodificar JSON")
-            except Exception as e:
-                print(f"Erro ao processar dados: {e}")
-                
+        # Pega o ID da chave da mensagem e decodifica se for bytes
+        request_id = mensagem.key.decode('utf-8') if isinstance(mensagem.key, bytes) else mensagem.key
+        if not request_id:
+            print(f"Erro: chave da mensagem não encontrada. Mensagem: {mensagem.value}")
+            return
+
+        # Prepara o documento para o Elasticsearch
+        documento = {
+            "request_id": request_id,
+            "request_timestamp": datetime.now().isoformat(),
+            "status": "pending",
+            "request": mensagem.value,
+            "banco": mensagem.value.get('banco'),
+            "acao": mensagem.value.get('acao')
+        }
+
+        # Salva a requisição
+        es.index(
+            index="requests_responses",
+            id=request_id,
+            document=documento
+        )
+        print(f"[KAFKA] Requisição {request_id} salva com sucesso")
     except Exception as e:
-        print(f"Erro na conexão com {endereco}: {e}")
-    finally:
-        socket_cliente.close()
-        print(f"Conexão encerrada com {endereco}")
+        print(f"[KAFKA] Erro ao processar requisição: {e}")
+        print(f"[KAFKA] Mensagem que causou o erro: {mensagem.value}")
 
-def iniciar_servidor_socket():
-    #Inicia o servidor socket
-    servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    servidor.bind((HOST, PORT))
-    servidor.listen(5)
-    print(f"Servidor socket rodando em {HOST}:{PORT}")
-    
-    while True:
-        socket_cliente, endereco = servidor.accept()
-        thread_cliente = threading.Thread(target=lidar_com_cliente, args=(socket_cliente, endereco))
-        thread_cliente.start()
+def processar_resposta(mensagem):
+    #Atualiza a requisição com a resposta no Elasticsearch
+    try:
+        # Pega o ID da chave da mensagem e decodifica se for bytes
+        request_id = mensagem.key.decode('utf-8') if isinstance(mensagem.key, bytes) else mensagem.key
+        if not request_id:
+            print(f"Erro: chave da mensagem não encontrada. Mensagem: {mensagem.value}")
+            return
 
-def consumir_mensagens_kafka():
-    #Pega as mensagens do Kafka e manda pro Elasticsearch
-    consumer = KafkaConsumer(
-        KAFKA_TOPIC,
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        value_deserializer=lambda x: json.loads(x.decode('utf-8')),
-        auto_offset_reset='earliest',
-        enable_auto_commit=True
-    )
-    
-    print("Começando a pegar mensagens do Kafka...")
-    
-    for mensagem in consumer:
+        # Verifica se o documento existe
+        if not es.exists(index="requests_responses", id=request_id):
+            print(f"Erro: Documento {request_id} não encontrado no Elasticsearch")
+            print(f"[KAFKA] Tentando criar novo documento com ID: {request_id}")
+            # Tenta criar um novo documento se não existir
+            documento = {
+                "request_id": request_id,
+                "request_timestamp": datetime.now().isoformat(),
+                "status": "completed",
+                "response": mensagem.value,
+                "response_timestamp": datetime.now().isoformat(),
+                "resultado": mensagem.value.get('resultado', 'N/A'),
+                "dados_resposta": mensagem.value.get('dados', {})
+            }
+            es.index(index="requests_responses", id=request_id, document=documento)
+            print(f"[KAFKA] Novo documento criado com ID: {request_id}")
+            return
+
+        # Prepara a atualização
+        atualizacao = {
+            "status": "completed",
+            "response": mensagem.value,
+            "response_timestamp": datetime.now().isoformat(),
+            "resultado": mensagem.value.get('resultado', 'N/A'),
+            "dados_resposta": mensagem.value.get('dados', {})
+        }
+
+        # Atualiza o documento
         try:
-            dados = mensagem.value
-            print(f"Mensagem recebida do Kafka: {dados}")
-            
-            # Verifica se tem todos os campos que precisamos
-            if all(key in dados for key in ['symbol', 'price', 'volume']):
-                # Manda os dados pro Elasticsearch
-                es.index(
-                    index="stock_data",
-                    document={
-                        "symbol": dados["symbol"],
-                        "price": float(dados["price"]),
-                        "volume": int(dados["volume"]),
-                        "timestamp": dados.get("timestamp", datetime.now().isoformat()),
-                        "source": "kafka"
-                    }
-                )
-            else:
-                print("Dados incompletos recebidos do Kafka")
-            
+            es.update(
+                index="requests_responses",
+                id=request_id,
+                body={
+                    "doc": atualizacao
+                }
+            )
+            print(f"[KAFKA] Resposta para requisição {request_id} salva com sucesso")
+            print(f"[KAFKA] Dados da resposta: {atualizacao}")
         except Exception as e:
-            print(f"Erro ao processar mensagem do Kafka: {e}")
+            print(f"[KAFKA] Erro ao atualizar documento no Elasticsearch: {e}")
+            # Tenta obter o documento atual para debug
+            try:
+                doc = es.get(index="requests_responses", id=request_id)
+                print(f"[KAFKA] Documento atual: {doc}")
+            except Exception as e2:
+                print(f"[KAFKA] Erro ao obter documento: {e2}")
+    except Exception as e:
+        print(f"[KAFKA] Erro ao processar resposta: {e}")
+        print(f"[KAFKA] Mensagem que causou o erro: {mensagem.value}")
 
 def main():
     try:
         # Cria o índice no Elasticsearch
         criar_indice_se_nao_existir()
         
-        # Inicia o servidor socket em uma thread separada
-        thread_socket = threading.Thread(target=iniciar_servidor_socket)
-        thread_socket.daemon = True
-        thread_socket.start()
+        # Configura os consumidores Kafka
+        consumer_requisicoes = KafkaConsumer(
+            TOPICO_REQUISICOES,
+            bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+            value_deserializer=lambda x: json.loads(x.decode('utf-8')),
+            auto_offset_reset='earliest',
+            enable_auto_commit=True
+        )
         
-        # Inicia o consumidor Kafka em uma thread separada
-        thread_kafka = threading.Thread(target=consumir_mensagens_kafka)
-        thread_kafka.daemon = True
-        thread_kafka.start()
+        consumer_respostas = KafkaConsumer(
+            TOPICO_VALIDACOES,
+            bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+            value_deserializer=lambda x: json.loads(x.decode('utf-8')),
+            auto_offset_reset='earliest',
+            enable_auto_commit=True
+        )
         
+        print("Iniciando processamento de mensagens...")
+        
+        # Processa mensagens dos dois tópicos simultaneamente
         while True:
-            time.sleep(1)
+            # Processa mensagens de requisições
+            mensagens_requisicoes = consumer_requisicoes.poll(timeout_ms=100)
+            for tp, msgs in mensagens_requisicoes.items():
+                for mensagem in msgs:
+                    processar_requisicao(mensagem)
+            
+            # Processa mensagens de respostas
+            mensagens_respostas = consumer_respostas.poll(timeout_ms=100)
+            for tp, msgs in mensagens_respostas.items():
+                for mensagem in msgs:
+                    processar_resposta(mensagem)
+            
+            time.sleep(0.1)  # Pequena pausa para não sobrecarregar
+            
     except KeyboardInterrupt:
         print("Encerrando o programa...")
     except Exception as e:
         print(f"Erro fatal: {e}")
-        sys.exit(1)
 
 if __name__ == "__main__":
     main()

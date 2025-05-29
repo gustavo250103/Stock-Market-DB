@@ -27,14 +27,15 @@ producer = KafkaProducer(
 
 def enviar_resposta_inclusao(mensagem, resultado, id_registro):
     #Envia resposta de inclusão para o tópico de validações
+    request_id = mensagem.value['request_id']  # Já é string do UUID
     resposta = {
-        'chave-requisicao': mensagem.key,
+        'chave-requisicao': request_id,
         'acao': mensagem.value['acao'],
         'banco': mensagem.value['banco'],
         'resultado': resultado,
         'id-registro-banco': id_registro
     }
-    producer.send('topico-validacoes', resposta)
+    producer.send('topico-validacoes', key=request_id, value=resposta)
 
 def inserir_mongodb(mensagem):
     #Insere dados no MongoDB
@@ -163,7 +164,7 @@ def pesquisar_postgresql(mensagem):
     """
     
     cursor.execute(query, (
-        dados['symbol'],
+        dados['codigo'],
         dados['data_inicio'],
         dados['data_fim']
     ))
@@ -209,7 +210,7 @@ def pesquisar_cassandra(mensagem):
     """
     
     resultados = session.execute(query, (
-        dados['symbol'],
+        dados['ativo'],
         dados['data_inicio'],
         dados['data_fim']
     ))
@@ -219,19 +220,17 @@ def pesquisar_cassandra(mensagem):
     
     return list(resultados)
 
-def enviar_resposta_pesquisa(mensagem, resultados):
+def enviar_resposta_pesquisa(mensagem, resultado):
     #Envia resposta de pesquisa para o tópico de validações
+    request_id = mensagem.value['request_id']  # Já é string do UUID
     resposta = {
-        'chave-requisicao': mensagem.key,
+        'chave-requisicao': request_id,
         'acao': mensagem.value['acao'],
-        'resultado': 'sucesso' if any(resultados.values()) else 'Nada encontrado',
-        'dados': {
-            'postgresql': resultados['postgresql'],
-            'mongodb': resultados['mongodb'],
-            'cassandra': resultados['cassandra']
-        }
+        'banco': mensagem.value['banco'],
+        'resultado': 'sucesso' if resultado else 'Nada encontrado',
+        'dados': resultado
     }
-    producer.send('topico-validacoes', resposta)
+    producer.send('topico-validacoes', key=request_id, value=resposta)
 
 if __name__ == '__main__':
     for mensagem in consumer:
@@ -253,13 +252,18 @@ if __name__ == '__main__':
                 enviar_resposta_inclusao(mensagem, resultado, "sucesso")
                 print(f"Dados inseridos com sucesso!")
         elif mensagem.value['acao'] == 'pesquisa':
-            print(f"Pesquisando dados em todos os bancos...")
-            resultados = {
-                'postgresql': pesquisar_postgresql(mensagem),
-                'mongodb': pesquisar_mongodb(mensagem),
-                'cassandra': pesquisar_cassandra(mensagem)
-            }
-            enviar_resposta_pesquisa(mensagem, resultados)
-            print(f"Pesquisa concluída em todos os bancos!")
+            banco = mensagem.value['banco']
+            print(f"Pesquisando dados no banco {banco}...")
+            
+            resultado = None
+            if banco == 'PostgreSQL':
+                resultado = pesquisar_postgresql(mensagem)
+            elif banco == 'MongoDB':
+                resultado = pesquisar_mongodb(mensagem)
+            elif banco == 'Cassandra':
+                resultado = pesquisar_cassandra(mensagem)
+            
+            enviar_resposta_pesquisa(mensagem, resultado)
+            print(f"Pesquisa concluída no banco {banco}!")
         print(f"Mensagem recebida: {mensagem.value}")
 
