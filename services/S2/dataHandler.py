@@ -27,7 +27,7 @@ producer = KafkaProducer(
 
 def enviar_resposta_inclusao(mensagem, resultado, id_registro):
     #Envia resposta de inclusão para o tópico de validações
-    request_id = mensagem.value['request_id']  # Já é string do UUID
+    request_id = mensagem.key.decode('utf-8')  # Já é string do UUID
     resposta = {
         'chave-requisicao': request_id,
         'acao': mensagem.value['acao'],
@@ -222,7 +222,7 @@ def pesquisar_cassandra(mensagem):
 
 def enviar_resposta_pesquisa(mensagem, resultado):
     #Envia resposta de pesquisa para o tópico de validações
-    request_id = mensagem.value['request_id']  # Já é string do UUID
+    request_id = mensagem.key.decode('utf-8')  # Já é string do UUID
     resposta = {
         'chave-requisicao': request_id,
         'acao': mensagem.value['acao'],
